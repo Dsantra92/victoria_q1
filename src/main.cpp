@@ -2,10 +2,11 @@
 
 #include <iostream>
 #include <string>
+#include <getopt.h>
 #include <unistd.h>
 
 void print_usage(const char* progName) {
-    std::cerr << "Usage: " << progName << " [options]\n"
+    std::cout << "Usage: " << progName << " [options]\n"
               << "Options:\n"
               << "  -e, --email     Email address\n"
               << "  -p, --password  Password (WARNING: insecure)\n"
@@ -22,9 +23,20 @@ int main(int argc, char *argv[]) {
     std::string password;
     std::string name;
     std::string gh_repo;
-    int opt;
 
-    while ((opt = getopt(argc, argv, "e:p:n:g:")) != -1) {
+    static struct option long_options[] = {
+        {"email",    required_argument, 0, 'e'},
+        {"password", required_argument, 0, 'p'},
+        {"name",     required_argument, 0, 'n'},
+        {"ghrepo",   required_argument, 0, 'g'},
+        {"help",     no_argument,       0, 'h'},
+        {0, 0, 0, 0}
+    };
+
+    int opt;
+    int option_index = 0;
+
+    while ((opt = getopt_long(argc, argv, "e:p:n:g:h", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'e':
                 email = optarg;
@@ -38,6 +50,9 @@ int main(int argc, char *argv[]) {
             case 'g':
                 gh_repo = optarg;
                 break;
+            case 'h':
+                print_usage(argv[0]);
+                return EXIT_SUCCESS;
             default: /* '?' */
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
