@@ -78,5 +78,19 @@ struct SubmissionResponse : public Message {
     char Token[32];  // Token text
 };
 
+struct LogoutRequest : public Message {
+    // Constructor for LogoutRequest
+    LogoutRequest(std::chrono::nanoseconds timestamp)
+        : Message('O', 13, timestamp) {
+        // Initialize ChkSum to 0, then calculate it
+        ChkSum = 0;
+        ChkSum = checksum16(reinterpret_cast<const uint8_t*>(this), sizeof(LogoutRequest));
+    }
+};
+
+struct LogoutResponse : public Message {
+    char Reason[32]; // Reason for logout
+};
+
 #pragma pack(pop) // Stop structure packing
 #endif // MESSAGE_H

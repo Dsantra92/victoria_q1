@@ -56,11 +56,31 @@ int main(int argc, char *argv[]) {
     std::cout << "GitHub Repo: " << gh_repo << std::endl;
 
     int socket_fd = initialize_socket(hostname, port);
+    if (socket_fd == -1) {
+        std::cerr << "[-] Failed to create a socket. Exiting!\n";
+        close(socket_fd);
+        return EXIT_FAILURE;
+    }
     bool login_success = attempt_login(socket_fd, email, password);
     if (login_success){
         std::cout << "[+] Login successful." << std::endl;
         bool submission_success = attempt_submission(socket_fd, name, email, gh_repo);
+        if (!submission_success){
+            std::cout << "[-] Submission failed." << std::endl;
+            close(socket_fd);
+            return EXIT_FAILURE;
+        } 
         bool logout_success = attempt_logout(socket_fd);
+        if (!logout_success){
+            std::cout << "[-] Logout failed." << std::endl;
+            close(socket_fd);
+            return EXIT_FAILURE;
+        }
+    }
+    else{
+        std::cerr << "[-] Login failed" << std::endl;
+        close(socket_fd);
+        return EXIT_FAILURE;
     }
     return 0;
 }

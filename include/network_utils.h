@@ -11,9 +11,12 @@
 int initialize_socket(const std::string& hostname, int port);
 
 // Declaration of the function that attempts login
-bool attempt_login(int socket_fd, std::string& email, std::string& password);
+bool attempt_login(int socket_fd, const std::string& email, const std::string& password);
 
 // Declaration of the function that attempts a submission
-bool attempt_submission(int socket_fd, std::string& name, std::string& email, std::string& repo);
+bool attempt_submission(int socket_fd, const std::string& name, const std::string& email, const std::string& repo);
+
+// Declaration of the function that logs out of the system
+bool attempt_logout(int socket_fd);
 
 #endif // NETWORK_UTILS_H

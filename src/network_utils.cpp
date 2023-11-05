@@ -7,7 +7,18 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
- 
+
+
+bool send_request(int socket_fd, const void* request, size_t length) {
+    const char* buffer = static_cast<const char*>(request);
+    ssize_t bytes_sent = send(socket_fd, buffer, length, 0);
+    return bytes_sent == static_cast<ssize_t>(length);
+}
+
+template<typename T>
+bool send_typed_request(int socket_fd, const T& request) {
+    return send_request(socket_fd, &request, sizeof(T));
+}
 
 bool getIPv4Address(const std::string& hostname, in_addr& ipv4Addr) {
     addrinfo hints, *res, *p;
@@ -17,7 +28,7 @@ bool getIPv4Address(const std::string& hostname, in_addr& ipv4Addr) {
 
     int status = getaddrinfo(hostname.c_str(), nullptr, &hints, &res);
     if (status != 0) {
-        std::cerr << "getaddrinfo error: " << gai_strerror(status) << '\n';
+        std::cerr << "[-] Failed to resolve hostname: " << hostname << ": " << gai_strerror(status) << '\n';
         return false;
     }
 
@@ -31,6 +42,27 @@ bool getIPv4Address(const std::string& hostname, in_addr& ipv4Addr) {
 
     freeaddrinfo(res);
     return false;
+}
+
+void handle_server_logout(char* response_buffer){
+    auto logout_response = reinterpret_cast<LogoutResponse*>(response_buffer);
+    if (logout_response->Reason[0] != '\0') { // Assuming a non-empty reason means successful logout
+        std::cout<< "Logout from server: Reason: " << logout_response->Reason << std::endl;
+    } else {
+        std::cerr << "Logout failed with no reason provided." << std::endl;
+    }
+    exit(EXIT_FAILURE);
+}
+
+bool checksum_is_correct(char* response_buffer, uint32_t size){
+    uint16_t received_checksum = static_cast<uint16_t>(
+        (static_cast<unsigned char>(response_buffer[12]) << 8) |
+        static_cast<unsigned char>(response_buffer[11])
+    );
+    response_buffer[11] = 0; // Reset checksum to zero before calculation
+    response_buffer[12] = 0; // Reset checksum to zero before calculation
+    uint16_t computed_checksum = checksum16(reinterpret_cast<const uint8_t*>(response_buffer), size);
+    return received_checksum == computed_checksum;
 }
 
 int initialize_socket(const std::string& hostname, int port) {
@@ -50,100 +82,128 @@ int initialize_socket(const std::string& hostname, int port) {
         std::cerr << "[-] Can't connect to the server\n";
         return -1; // Connection failed
     }
-    std::cout << "[+] Connected to the server\n";
-
     return socket_fd; // Socket successfully created and connected
 }
 
-bool send_request(int socket_fd, const void* request, size_t length) {
-    const char* buffer = static_cast<const char*>(request);
-    ssize_t bytes_sent = send(socket_fd, buffer, length, 0);
-    return bytes_sent == static_cast<ssize_t>(length);
-}
+bool attempt_login(int socket_fd, const std::string& email, const std::string& password) {
+    LoginRequest login_request(email.c_str(), password.c_str(),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()));
 
-template<typename T>
-bool send_typed_request(int socket_fd, const T& request) {
-    return send_request(socket_fd, &request, sizeof(T));
-}
+    char response_buffer[sizeof(LoginResponse)]; // Buffer to receive data
+    bool checksum_correct = false;
 
-bool attempt_login(int socket_fd, std::string& email, std::string& password) {
-    LoginRequest login_request = LoginRequest(email.c_str(), password.c_str(), std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()));
-
-    char response_buffer[sizeof(LoginResponse)]; // Adjust size as needed
-
-    for (int attempts = 0; attempts < 3; ++attempts) {
+    while (!checksum_correct) {
         if (!send_typed_request(socket_fd, login_request)) {
-            std::cerr << "Failed to send login request." << std::endl;
-            continue; // Attempt to send the login request again
+            std::cerr << "[-] Socket failed to send login request. Error: " << strerror(errno) << std::endl;
+            return false;
         }
-
-        // Receive the response into the buffer
         ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(LoginResponse), MSG_WAITALL);
-        std::cout<<sizeof(LoginResponse)<<std::endl;
-        std::cout<<received_bytes<<std::endl;
-        if (received_bytes == sizeof(LoginResponse)) {
-            // Use placement new to construct LoginResponse object from the buffer
-            auto login_response = reinterpret_cast<LoginResponse*>(response_buffer);
-
-            // Check the response to determine if login was successful
-            if (login_response->Code == 'Y') { // Assuming 'Y' signifies a successful login
-                std::cout << "Login successful." << std::endl;
-                login_response->~LoginResponse();  // Call destructor for the placement new'd object
-                return true;
-            }
-            else{
-                std::cout<<"Login failed"<<std::endl;
-            }
-            login_response->~LoginResponse();  // Call destructor for the placement new'd object
-        } else {
-            std::cerr << "Failed to receive login response or partial response received." << std::endl;
+        if (received_bytes < 0) {
+            std::cerr << "[-] Socket recv failed with error: " << strerror(errno) << std::endl;
+            return false;
+        } else if (received_bytes == 0) {  // Connection has been closed gracefully
+            std::cout << "[-] Connection closed by the server." << std::endl;
+            return false;
         }
-
-        // Add a delay before retrying to comply with the throttling requirement
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        checksum_correct = checksum_is_correct(response_buffer, received_bytes);
+        if (!checksum_correct){
+            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
+        }
     }
+    if (response_buffer[0] == 'G'){
+        handle_server_logout(response_buffer); // should exit here
+    }
+    LoginResponse* login_response = reinterpret_cast<LoginResponse*>(response_buffer);
 
-    std::cerr << "All login attempts failed." << std::endl;
+    if (login_response->Code == 'Y') {
+        return true;
+    }
     return false;
 }
 
-
-bool attempt_submission(int socket_fd, std::string& name, std::string& email, std::string& repo) {
+bool attempt_submission(int socket_fd, const std::string& name, const std::string& email, const std::string& repo) {
     // Create a submission request
-    SubmissionRequest submission_request(name.c_str(), email.c_str(), repo.c_str(), 
+    SubmissionRequest submission_request(name.c_str(), email.c_str(), repo.c_str(),
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()));
 
-    // Buffer to hold the response
-    char response_buffer[sizeof(SubmissionResponse)];
+    char response_buffer[sizeof(SubmissionResponse)]; // Buffer to receive data
+    bool checksum_correct = false;
 
-    for (int attempts = 0; attempts < 3; ++attempts) {
+    while (!checksum_correct) {
         if (!send_typed_request(socket_fd, submission_request)) {
-            std::cerr << "Failed to send submission request." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
-            continue; // Attempt to send the submission request again
+            std::cerr << "[-] Socket failed to send submission request. Error: " << strerror(errno) << std::endl;
+            return false;
         }
 
         // Attempt to receive the submission response
-        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(response_buffer), MSG_WAITALL);
-        if (received_bytes != sizeof(response_buffer)) {
-            std::cerr << "Failed to receive submission response." << std::endl;
+        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(SubmissionResponse), MSG_WAITALL);
+        if (received_bytes < 0) {
+            std::cerr << "[-] Socket recv failed with error: " << strerror(errno) << std::endl;
+            return false;
+        } else if (received_bytes == 0) { // Connection has been closed gracefully
+            std::cout << "[-] Connection closed by the server." << std::endl;
+            return false;
+        }
+
+        checksum_correct = checksum_is_correct(response_buffer, received_bytes);
+        if (!checksum_correct){
             std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
-            continue; // Attempt to receive the submission response again
         }
-
-        // Assuming response_buffer contains the SubmissionResponse in the correct format
-        auto submission_response = reinterpret_cast<SubmissionResponse*>(response_buffer);
-
-        // Check the response Token to determine if submission was successful
-        if (submission_response->Token[0] != '\0') { // Assuming non-empty Token signifies success
-            std::cout << "Submission successful. Token: " << submission_response->Token << std::endl;
-            return true;
-        }
-
-        // Add a delay before retrying to comply with the throttling requirement
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    if (response_buffer[0] == 'G'){
+        handle_server_logout(response_buffer); // should exit here
     }
 
-    std::cerr << "All submission attempts failed." << std::endl;
+    // Construct SubmissionResponse object from the buffer using placement new
+    SubmissionResponse* submission_response = reinterpret_cast<SubmissionResponse*>(response_buffer);
+
+    // Check the response Token to determine if submission was successful
+    if (submission_response->Token[0] != '\0') { // Assuming non-empty Token signifies success
+        std::cout << "[+] Submission successful. Token: " << submission_response->Token << std::endl;
+        return true;
+    }
+    return false;
+}
+
+bool attempt_logout(int socket_fd) {
+    // Create a logout request
+    LogoutRequest logout_request(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()));
+
+    // Buffer to hold the response
+    char response_buffer[sizeof(LogoutResponse)];
+    bool checksum_correct = false;
+
+    while (!checksum_correct) {
+        // Send the logout request
+        if (!send_typed_request(socket_fd, logout_request)) {
+            std::cerr << "[-] Socket failed to send logout request. Error: " << strerror(errno) << std::endl;
+            return false;
+        }
+
+        // Attempt to receive the logout response
+        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(response_buffer), MSG_WAITALL);
+        if (received_bytes < 0) {
+            std::cerr << "[-] Socket recv failed with error: " << strerror(errno) << std::endl;
+            return false;
+        } else if (received_bytes == 0) {
+            std::cout << "[-] Connection closed by the server." << std::endl;
+            return false; // Connection has been closed gracefully
+        }
+
+        checksum_correct = checksum_is_correct(response_buffer, received_bytes);
+        if (!checksum_correct){
+            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
+        }
+    }
+
+    // Construct LogoutResponse object from the buffer
+    LogoutResponse* logout_response = reinterpret_cast<LogoutResponse*>(response_buffer);
+
+    // Check the reason for logout
+    if (logout_response->Reason[0] != '\0') { // Assuming a non-empty reason means successful logout
+        std::cout << "[+] Logout successful. Reason: " << logout_response->Reason << std::endl;
+        return true;
+    }
     return false;
 }
