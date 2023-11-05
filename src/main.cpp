@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <unistd.h>
 
 void print_usage(const char* progName) {
     std::cerr << "Usage: " << progName << " [options]\n"

@@ -2,10 +2,7 @@
 #define NETWORK_UTILS_H
 
 #include "message.h" // Include the message definitions
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include <string>
 
 // Declaration of the function that initializes the socket
 int initialize_socket(const std::string& hostname, int port);

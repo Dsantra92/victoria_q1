@@ -2,12 +2,12 @@
 #include "message.h"
 
 #include <iostream>
-#include <cstring>
+#include <string>
 #include <thread>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
-
+#include <unistd.h>
 
 bool send_request(int socket_fd, const void* request, size_t length) {
     const char* buffer = static_cast<const char*>(request);
@@ -55,6 +55,7 @@ void handle_server_logout(char* response_buffer){
 }
 
 bool checksum_is_correct(char* response_buffer, uint32_t size){
+    // get the checksum from the response
     uint16_t received_checksum = static_cast<uint16_t>(
         (static_cast<unsigned char>(response_buffer[12]) << 8) |
         static_cast<unsigned char>(response_buffer[11])
