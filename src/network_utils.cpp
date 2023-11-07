@@ -20,6 +20,16 @@ bool send_typed_request(int socket_fd, const T& request) {
     return send_request(socket_fd, &request, sizeof(T));
 }
 
+bool isPrivateIPAddress(const in_addr& addr) {
+    uint32_t ip = ntohl(addr.s_addr);
+
+    // Check for private IP address ranges
+    return ((ip >= 0x0A000000 && ip <= 0x0AFFFFFF) ||  // 10.0.0.0 - 10.255.255.255
+            (ip >= 0xAC100000 && ip <= 0xAC1FFFFF) ||  // 172.16.0.0 - 172.31.255.255
+            (ip >= 0xC0A80000 && ip <= 0xC0A8FFFF) ||  // 192.168.0.0 - 192.168.255.255
+            (ip >= 0x7F000000 && ip <= 0x7FFFFFFF));   // 127.0.0.0 - 127.255.255.255
+}
+
 bool getIPv4Address(const std::string& hostname, in_addr& ipv4Addr) {
     addrinfo hints, *res, *p;
     memset(&hints, 0, sizeof(hints));
@@ -33,11 +43,14 @@ bool getIPv4Address(const std::string& hostname, in_addr& ipv4Addr) {
     }
 
     for (p = res; p != nullptr; p = p->ai_next) {
-        // Since we're only looking for IPv4, we can copy the first IPv4 address we find
+        // Since we're only looking for IPv4, we can copy the first public (non-fallback) IPv4 address we find
         sockaddr_in* ipv4 = (sockaddr_in *)p->ai_addr;
         ipv4Addr = ipv4->sin_addr;
-        freeaddrinfo(res);
-        return true;
+        if (!isPrivateIPAddress(ipv4->sin_addr)) {
+            ipv4Addr = ipv4->sin_addr; // Copy the public address
+            freeaddrinfo(res); // Free the addrinfo structure
+            return true;
+        }
     }
 
     freeaddrinfo(res);
