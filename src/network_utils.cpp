@@ -64,7 +64,6 @@ void handle_server_logout(char* response_buffer){
     } else {
         std::cerr << "Logout failed with no reason provided." << std::endl;
     }
-    exit(EXIT_FAILURE);
 }
 
 bool checksum_is_correct(char* response_buffer, uint32_t size){
@@ -104,14 +103,14 @@ bool attempt_login(int socket_fd, const std::string& email, const std::string& p
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()));
 
     char response_buffer[sizeof(LoginResponse)]; // Buffer to receive data
-    bool checksum_correct = false;
 
-    while (!checksum_correct) {
-        if (!send_typed_request(socket_fd, login_request)) {
-            std::cerr << "[-] Socket failed to send login request. Error: " << strerror(errno) << std::endl;
-            return false;
-        }
-        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(LoginResponse), MSG_WAITALL);
+    if (!send_typed_request(socket_fd, login_request)) {
+        std::cerr << "[-] Socket failed to send login request. Error: " << strerror(errno) << std::endl;
+        return false;
+    }
+
+    while (true) {
+        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(LoginResponse), 0);
         if (received_bytes < 0) {
             std::cerr << "[-] Socket recv failed with error: " << strerror(errno) << std::endl;
             return false;
@@ -119,14 +118,20 @@ bool attempt_login(int socket_fd, const std::string& email, const std::string& p
             std::cout << "[-] Connection closed by the server." << std::endl;
             return false;
         }
-        checksum_correct = checksum_is_correct(response_buffer, received_bytes);
-        if (!checksum_correct){
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
+
+        if (checksum_is_correct(response_buffer, received_bytes)) {
+            break; // Exit the loop if checksum is correct
+        } else {
+            std::cerr << "[-] Received message with incorrect checksum. Waiting for another message." << std::endl;
+            // Just drop the message and wait for another one, as per instructions.
         }
     }
-    if (response_buffer[0] == 'G'){
+
+    if (response_buffer[0] == 'G') {
         handle_server_logout(response_buffer); // should exit here
+        return false;
     }
+
     LoginResponse* login_response = reinterpret_cast<LoginResponse*>(response_buffer);
 
     if (login_response->Code == 'Y') {
@@ -141,16 +146,15 @@ bool attempt_submission(int socket_fd, const std::string& name, const std::strin
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()));
 
     char response_buffer[sizeof(SubmissionResponse)]; // Buffer to receive data
-    bool checksum_correct = false;
 
-    while (!checksum_correct) {
-        if (!send_typed_request(socket_fd, submission_request)) {
-            std::cerr << "[-] Socket failed to send submission request. Error: " << strerror(errno) << std::endl;
-            return false;
-        }
+    if (!send_typed_request(socket_fd, submission_request)) {
+        std::cerr << "[-] Socket failed to send submission request. Error: " << strerror(errno) << std::endl;
+        return false;
+    }
 
+    while (true) {
         // Attempt to receive the submission response
-        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(SubmissionResponse), MSG_WAITALL);
+        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(SubmissionResponse), 0);
         if (received_bytes < 0) {
             std::cerr << "[-] Socket recv failed with error: " << strerror(errno) << std::endl;
             return false;
@@ -159,13 +163,17 @@ bool attempt_submission(int socket_fd, const std::string& name, const std::strin
             return false;
         }
 
-        checksum_correct = checksum_is_correct(response_buffer, received_bytes);
-        if (!checksum_correct){
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
+        if (checksum_is_correct(response_buffer, received_bytes)) {
+            break; // Exit the loop if checksum is correct
+        } else {
+            std::cerr << "[-] Received message with incorrect checksum. Waiting for another message." << std::endl;
+            // Just drop the message and wait for another one, as per instructions.
         }
     }
+
     if (response_buffer[0] == 'G'){
         handle_server_logout(response_buffer); // should exit here
+        return false;
     }
 
     // Construct SubmissionResponse object from the buffer using placement new
@@ -186,17 +194,16 @@ bool attempt_logout(int socket_fd) {
 
     // Buffer to hold the response
     char response_buffer[sizeof(LogoutResponse)];
-    bool checksum_correct = false;
 
-    while (!checksum_correct) {
-        // Send the logout request
-        if (!send_typed_request(socket_fd, logout_request)) {
-            std::cerr << "[-] Socket failed to send logout request. Error: " << strerror(errno) << std::endl;
-            return false;
-        }
+    // Send the logout request
+    if (!send_typed_request(socket_fd, logout_request)) {
+        std::cerr << "[-] Socket failed to send logout request. Error: " << strerror(errno) << std::endl;
+        return false;
+    }
 
+    while (true) {
         // Attempt to receive the logout response
-        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(response_buffer), MSG_WAITALL);
+        ssize_t received_bytes = recv(socket_fd, response_buffer, sizeof(response_buffer), 0);
         if (received_bytes < 0) {
             std::cerr << "[-] Socket recv failed with error: " << strerror(errno) << std::endl;
             return false;
@@ -205,9 +212,11 @@ bool attempt_logout(int socket_fd) {
             return false; // Connection has been closed gracefully
         }
 
-        checksum_correct = checksum_is_correct(response_buffer, received_bytes);
-        if (!checksum_correct){
-            std::this_thread::sleep_for(std::chrono::milliseconds(500)); // Retry delay
+        if (checksum_is_correct(response_buffer, received_bytes)) {
+            break; // Exit the loop if checksum is correct
+        } else {
+            std::cerr << "[-] Received message with incorrect checksum. Waiting for another message." << std::endl;
+            // Just drop the message and wait for another one, as per instructions.
         }
     }
 
